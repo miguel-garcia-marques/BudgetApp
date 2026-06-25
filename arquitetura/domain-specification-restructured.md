@@ -1,0 +1,840 @@
+# Personal Finance / Budgeting Domain Specification
+
+- Este documento define o modelo de domínio e as regras de negócio de uma aplicação de finanças pessoais e orçamento.
+- A aplicação está organizada em torno de dados financeiros persistidos, configuração de planeamento, fluxos de execução e análise calculada.
+- A aplicação deve preservar a correção histórica tratando apenas entidades persistidas como fonte de verdade.
+- Valores calculados devem ser derivados de dados persistidos e nunca devem ser tratados como estado de negócio persistido.
+
+## Domain Principles
+
+- Source of truth:
+    - Apenas entidades persistidas são consideradas fonte de verdade.
+    - A fonte de verdade inclui:
+        - Confirmed [`Transactions`](#transactions)
+        - Versioned Configurations
+        - Persisted entities
+    - Conceitos calculados não são fonte de verdade.
+- Persisted Data:
+    - Esta lista identifica entidades guardadas como fonte de verdade.
+    - Entidades:
+        - [`Users`](#users)
+        - [`Members`](#members)
+        - [`Households`](#households)
+        - [`Accounts`](#accounts)
+        - [`Transactions`](#transactions)
+        - [`Transaction Items`](#transaction-items)
+        - [`Transaction Imports`](#transaction-import)
+        - [`Household Configurations`](#household-configuration)
+        - [`Budget Configurations`](#budget-configuration)
+        - [`Financial Goals`](#financial-goals)
+        - [`Merchants`](#merchants)
+        - [`Categories`](#categories)
+        - [`Budget Rules`](#budget-rules)
+        - [`Recurring Transaction Definitions`](#recurring-transaction-definitions)
+        - [`Account Rules`](#account-rules)
+        - [`Audit Logs`](#audit-log)
+- Planning:
+    - Esta lista identifica conceitos usados para planeamento, independentemente de alguns também serem entidades persistidas.
+    - Conceitos:
+        - [`Recurring Transaction Definitions`](#recurring-transaction-definitions)
+        - [`Budget Rules`](#budget-rules)
+        - [`Financial Goals`](#financial-goals)
+        - Eating Out Planning
+        - [`Household Configuration`](#household-configuration)
+        - [`Budget Configuration`](#budget-configuration)
+- Execution:
+    - [`Transaction Imports`](#transaction-import)
+    - [`Transaction`](#transactions) Review
+    - Confirmed [`Transactions`](#transactions)
+    - Rejected [`Transactions`](#transactions)
+    - Archived [`Transactions`](#transactions)
+- Calculated Analysis:
+    - [`Budget`](#budget)
+    - Current Balance
+    - Expected Balance
+    - Expected End Balance
+    - Total Income
+    - Total Expenses
+    - Available To Spend
+    - Remaining [`Budget`](#budget)
+    - Remaining Savings Target
+    - Needs Allocated
+    - Wants Allocated
+    - Savings Allocated
+    - Needs Used
+    - Wants Used
+    - Savings Used
+    - Daily Spending Limit
+    - [`Savings Progress`](#financial-goals)
+    - Spending Forecast
+    - Eating Out Suggestions
+- Valores calculados:
+    - São derivados de entidades persistidas.
+    - São recalculados quando dados persistidos relevantes mudam.
+    - Não devem ser persistidos como estado de negócio autoritativo.
+
+## Households
+
+- Um [`Household`](#households) é uma vista de agregação financeira sobre [`Accounts`](#accounts).
+- Um [`Household`](#households):
+    - Tem um identificador.
+    - Tem um criador.
+        - Faz parte da lista de [`Members`](#members).
+    - Tem um ou mais [`Members`](#members).
+    - Tem uma moeda associada.
+    - Tem uma [`Household Configuration`](#household-configuration) ativa de cada vez.
+        - Guarda apenas a referência para a [`Household Configuration`](#household-configuration) ativa.
+    - As suas [`Household Configurations`](#household-configuration) são versionadas e ligadas ao [`Household`](#households) por referência.
+    - Tem [`Financial Goals`](#financial-goals).
+    - Tem [`Budget Rules`](#budget-rules) através da sua [`Household Configuration`](#household-configuration) ativa.
+    - Tem [`Cycles`](#cycles).
+- Referência para configuração ativa:
+    - O [`Household`](#households) deve guardar `activeHouseholdConfigurationId`.
+    - O [`Household`](#households) não deve guardar uma lista embutida de [`Household Configurations`](#household-configuration) como estado próprio.
+    - O histórico de configuração deve ser obtido consultando [`Household Configurations`](#household-configuration) pelo `householdId`.
+- O criador:
+    - É um [`User`](#users).
+    - Torna-se automaticamente [`Member`](#members) do [`Household`](#households).
+    - Torna-se automaticamente [`Member`](#members) admin.
+    - Pode promover outros [`Members`](#members) a admin.
+    - Tem acesso a vistas de controlo e gestão do [`Household`](#households) que [`Members`](#members) não admin não têm.
+- Membership do [`Household`](#households):
+    - Um [`Household`](#households) contém [`Members`](#members).
+    - Um [`Member`](#members) representa um [`User`](#users) dentro de um [`Household`](#households) específico.
+    - Os [`Members`](#members) do [`Household`](#households) são definidos na [`Household Configuration`](#household-configuration).
+- [`Accounts`](#accounts) do [`Household`](#households):
+    - Um [`Household`](#households) agrega uma ou mais [`Accounts`](#accounts).
+    - Uma [`Account`](#accounts) pode pertencer a mais do que um [`Household`](#households).
+    - [`Households`](#households) diferentes podem agregar subconjuntos diferentes das mesmas [`Accounts`](#accounts).
+    - Adicionar uma [`Account`](#accounts) a um [`Household`](#households) afeta cálculos apenas a partir do momento em que a [`Account`](#accounts) é adicionada.
+    - Adicionar uma [`Account`](#accounts) a um [`Household`](#households) não deve afetar retroativamente [`Cycles`](#cycles) anteriores ou cálculos históricos.
+- Poupança do [`Household`](#households):
+    - Um [`Household`](#households) pode definir um [`Savings Goal`](#financial-goals) principal.
+    - Este [`Savings Goal`](#financial-goals) não é o mesmo conceito que uma [`Savings Account`](#accounts).
+    - O [`Savings Goal`](#financial-goals) principal representa o objetivo de poupança usado pelos [`Budgets`](#budget).
+    - No início de cada [`Cycle`](#cycles), o [`Cycle`](#cycles) pode herdar o target do [`Savings Goal`](#financial-goals) principal do [`Household`](#households) para a sua [`Budget Configuration`](#budget-configuration).
+    - O target de poupança herdado para o [`Cycle`](#cycles) pode ser substituído nesse [`Cycle`](#cycles) específico através da [`Budget Configuration`](#budget-configuration).
+- Planeamento de comer fora:
+    - A [`Household Configuration`](#household-configuration) define quantos dias por semana o [`Household`](#households) pode comer fora.
+    - A [`Household Configuration`](#household-configuration) define quais os dias da semana preferenciais para comer fora.
+    - A [`Household Configuration`](#household-configuration) define o valor máximo por pessoa por ocasião de comer fora.
+    - O número de pessoas para planeamento de comer fora corresponde, por defeito, ao número de [`Members`](#members) incluídos na vista do [`Budget`](#budget).
+
+## Household Configuration
+
+- [`Household Configuration`](#household-configuration) é configuração persistida.
+- Uma [`Household Configuration`](#household-configuration):
+    - Tem um identificador.
+    - Tem `householdId`.
+    - Tem um nome.
+    - Pertence a um [`Household`](#households).
+    - Tem um número de versão.
+    - Tem um estado de ciclo de vida que indica se está ativa ou histórica.
+    - Define um ou mais [`Members`](#members).
+    - Define as [`Accounts`](#accounts) agregadas pelo [`Household`](#households).
+    - Define os [`Financial Goals`](#financial-goals) por defeito do [`Household`](#households).
+    - Define o [`Savings Goal`](#financial-goals) principal, quando existir.
+    - Define [`Budget Rules`](#budget-rules).
+    - Define valores por defeito para planeamento de comer fora, detalhados em "Configuração de comer fora".
+- Versionamento:
+    - Todas as [`Household Configurations`](#household-configuration) são versionadas.
+    - Editar uma [`Household Configuration`](#household-configuration) nunca sobrescreve a versão anterior.
+    - Editar uma [`Household Configuration`](#household-configuration) cria uma nova versão.
+    - Apenas uma versão de [`Household Configuration`](#household-configuration) está ativa de cada vez.
+    - A versão ativa é referenciada pelo `activeHouseholdConfigurationId` do [`Household`](#households).
+    - Versões anteriores permanecem disponíveis para fins históricos.
+    - Versões anteriores podem ser consultadas ou restauradas quando necessário.
+    - O histórico de versões é consultado através de `householdId`, ordenado por número de versão.
+    - [`Cycles`](#cycles) usam sempre a versão de [`Household Configuration`](#household-configuration) que estava ativa quando foram criados.
+    - Cálculos históricos de [`Cycles`](#cycles) devem continuar a referenciar a versão de configuração associada a esse [`Cycle`](#cycles).
+- Configuração de poupança:
+    - O [`Savings Goal`](#financial-goals) mensal por defeito é calculado a partir da soma da alocação de savings de cada [`Account`](#accounts).
+    - O criador do [`Household`](#households) pode definir um [`Savings Goal`](#financial-goals) mensal por defeito mais alto.
+        - Se o valor definido pelo criador for superior à soma das alocações de savings das [`Accounts`](#accounts), é usado o valor definido pelo criador.
+        - Se o valor definido pelo criador for inferior à soma das alocações de savings das [`Accounts`](#accounts), é usada a soma calculada.
+    - Se o target de poupança definido manualmente for inferior à soma calculada pelas [`Budget Rules`](#budget-rules) das [`Accounts`](#accounts), essa redução deve ser guardada como override explícito.
+    - Este override deve indicar que o [`Household`](#households) aceitou poupar menos do que o valor recomendado pelas [`Budget Rules`](#budget-rules).
+    - O target de poupança de um [`Cycle`](#cycles) é associado a esse [`Cycle`](#cycles) através da [`Budget Configuration`](#budget-configuration).
+    - O target de poupança do [`Cycle`](#cycles) só começa a ser reduzido quando o valor disponível para gastos fica abaixo do target de poupança do [`Cycle`](#cycles).
+- Configuração de comer fora:
+    - Define quantas vezes por semana é permitido comer fora.
+    - Define os dias da semana por defeito para comer fora.
+    - Define o valor máximo por pessoa por ocasião de comer fora.
+- Configuração de [`Budget Rules`](#budget-rules):
+    - [`Budget Rules`](#budget-rules) podem ser definidas como regra por defeito do [`Household`](#households).
+    - [`Budget Rules`](#budget-rules) podem ser definidas por [`Account`](#accounts).
+    - A associação entre [`Account`](#accounts) e [`Budget Rule`](#budget-rules) é guardada na [`Household Configuration`](#household-configuration), porque a mesma [`Account`](#accounts) pode pertencer a vários [`Households`](#households) com regras diferentes.
+    - Um [`Household`](#households) pode ter mais do que uma [`Budget Rule`](#budget-rules).
+    - Apenas uma [`Budget Rule`](#budget-rules) pode aplicar-se a uma [`Account`](#accounts) específica.
+    - Se existir uma [`Budget Rule`](#budget-rules) por defeito do [`Household`](#households), ela pode ser aplicada individualmente a cada [`Account`](#accounts).
+    - Uma [`Account`](#accounts) pode ter uma [`Budget Rule`](#budget-rules) específica.
+    - Uma [`Account`](#accounts) pode optar explicitamente por não usar nenhuma [`Budget Rule`](#budget-rules), mesmo quando existe uma [`Budget Rule`](#budget-rules) por defeito do [`Household`](#households).
+    - Quando uma [`Account`](#accounts) opta por não usar [`Budget Rule`](#budget-rules), essa decisão deve ser guardada explicitamente na [`Household Configuration`](#household-configuration) e não inferida pela ausência de regra.
+    - A [`Household Configuration`](#household-configuration) deve guardar uma configuração por [`Account`](#accounts) incluída no [`Household`](#households), indicando uma das seguintes opções:
+        - Herdar a [`Budget Rule`](#budget-rules) por defeito do [`Household`](#households).
+        - Usar uma [`Budget Rule`](#budget-rules) específica.
+        - Não usar nenhuma [`Budget Rule`](#budget-rules).
+
+## Users
+
+- [`User`](#users) é uma entidade persistida.
+- Um [`User`](#users):
+    - Tem um identificador.
+    - Tem um ou mais métodos de sign-in.
+    - Pode suportar passkeys.
+    - É proprietário ou coproprietário de [`Accounts`](#accounts).
+    - Pertence a [`Households`](#households) através de [`Members`](#members).
+    - Pode aparecer como [`Members`](#members) diferentes em [`Households`](#households) diferentes.
+
+## Members
+
+- [`Member`](#members) é uma entidade persistida que liga um [`User`](#users) a um [`Household`](#households).
+- Um [`Member`](#members):
+    - Tem um identificador.
+    - Pertence a um [`Household`](#households).
+    - Referencia um [`User`](#users).
+    - Pode ter papel de admin.
+    - Pode estar associado a uma ou mais [`Accounts`](#accounts) através das [`Accounts`](#accounts) do [`User`](#users) incluídas no [`Household`](#households).
+- [`Members`](#members) não são proprietários diretos de [`Accounts`](#accounts).
+- [`Accounts`](#accounts) pertencem a [`Users`](#users), e [`Households`](#households) agregam [`Accounts`](#accounts) através dos seus [`Members`](#members) e da sua configuração.
+
+## Accounts
+
+- [`Account`](#accounts) é uma entidade persistida.
+- Uma [`Account`](#accounts):
+    - Tem um identificador.
+    - Pertence a um ou mais [`Users`](#users).
+    - Deve ter pelo menos um [`User`](#users) associado.
+    - Pode ter no máximo dois [`Users`](#users) associados.
+    - Pode estar associada a mais do que um [`Household`](#households).
+    - Tem um [`Account Type`](#accounts).
+    - Pode ter [`Account Rules`](#account-rules).
+    - É dona de [`Transactions`](#transactions).
+- [`Transactions`](#transactions):
+    - Pertencem exatamente a uma [`Account`](#accounts).
+    - Não devem pertencer diretamente a um [`Household`](#households), [`Cycle`](#cycles), [`Member`](#members) ou [`Budget`](#budget).
+    - São consideradas parte de um [`Household`](#households) apenas quando a sua [`Account`](#accounts) está incluída nesse [`Household`](#households) para a data relevante.
+    - São consideradas parte de um [`Cycle`](#cycles) apenas quando o seu timestamp de transação está dentro do intervalo de datas do [`Cycle`](#cycles).
+- [`Account Types`](#accounts):
+    - Individual
+    - Joint
+    - Savings
+- [`Individual Account`](#accounts):
+    - Tem exatamente um [`User`](#users) proprietário.
+    - Pode ter uma [`Savings Account`](#accounts) associada.
+- [`Joint Account`](#accounts):
+    - Tem exatamente dois [`Users`](#users) proprietários.
+    - Pode ter uma [`Savings Account`](#accounts) associada.
+    - [`Transactions`](#transactions) pertencentes a [`Joint Accounts`](#accounts) pertencem a ambos os proprietários da [`Account`](#accounts).
+    - Uma [`Transaction`](#transactions) pode guardar opcionalmente qual [`User`](#users) realizou efetivamente a compra.
+    - O [`User`](#users) que realizou a compra é usado apenas para estatísticas.
+    - O [`User`](#users) que realizou a compra nunca altera a propriedade da [`Transaction`](#transactions).
+- [`Savings Account`](#accounts):
+    - Tem uma [`Account`](#accounts) principal associada, que pode ser Individual ou Joint.
+    - Contém apenas transferências de ou para [`Accounts`](#accounts) associadas.
+    - Não deve ser confundida com um [`Savings Goal`](#financial-goals).
+
+## Account Rules
+
+- [`Account Rules`](#account-rules) são regras de negócio persistidas.
+- [`Account Rules`](#account-rules) restringem quais [`Categories`](#categories) de [`Transaction`](#transactions) são permitidas para uma [`Account`](#accounts).
+- [`Account Type`](#accounts) deve descrever apenas a natureza estrutural da [`Account`](#accounts), como quem é proprietário da conta e se é uma conta de poupança.
+- A finalidade de utilização da [`Account`](#accounts) deve ser representada por [`Account Rules`](#account-rules), não por novos [`Account Types`](#accounts).
+- [`Account Types`](#accounts) especializados como `Food Account`, `Restaurants Account`, `Supermarket Account` ou `Merchant Account` não devem ser criados.
+- [`Account Types`](#accounts) permitidos:
+    - Individual
+    - Joint
+    - Savings
+- [`Account Rules`](#account-rules) descrevem restrições de utilização, como quais [`Categories`](#categories) são permitidas.
+- Exemplo:
+    - Uma [`Account`](#accounts) pode ser usada pelo User como conta de alimentação.
+    - No domínio, essa [`Account`](#accounts) continua a ser uma [`Individual Account`](#accounts) ou [`Joint Account`](#accounts).
+    - As suas [`Account Rules`](#account-rules) podem permitir apenas:
+        - Restaurants
+        - Cafes
+        - Supermarkets
+    - O nome "conta de alimentação" descreve a finalidade de utilização, não um novo [`Account Type`](#accounts).
+
+## Cycles
+
+- [`Cycle`](#cycles) é uma entidade persistida.
+- Um [`Cycle`](#cycles) representa apenas um intervalo temporal.
+- Um [`Cycle`](#cycles):
+    - Tem um identificador.
+    - Pertence a um [`Household`](#households).
+    - Tem um timestamp de início.
+    - Tem um timestamp de fim.
+    - Tem um estado.
+    - Referencia a versão de [`Household Configuration`](#household-configuration) que estava ativa quando foi criado.
+    - Tem uma [`Budget Configuration`](#budget-configuration).
+- Intervalo de datas do [`Cycle`](#cycles):
+    - A [`Household Configuration`](#household-configuration) define o dia do mês em que [`Cycles`](#cycles) começam.
+    - Um [`Cycle`](#cycles) decorre desde o seu dia de início até ao dia anterior ao início do [`Cycle`](#cycles) seguinte.
+    - [`Cycles`](#cycles) são criados automaticamente quando chega o dia de início configurado.
+    - Se o dia de início configurado calhar num fim de semana ou feriado, o [`Cycle`](#cycles) começa no dia útil anterior.
+    - Se o dia de início configurado do [`Cycle`](#cycles) seguinte calhar num fim de semana ou feriado, o [`Cycle`](#cycles) atual termina no dia útil anterior ao início do próximo [`Cycle`](#cycles).
+- [`Cycle`](#cycles) e [`Accounts`](#accounts):
+    - Um [`Cycle`](#cycles) não é dono de [`Accounts`](#accounts).
+    - Por defeito, os cálculos de [`Budget`](#budget) de um [`Cycle`](#cycles) incluem as [`Accounts`](#accounts) presentes na [`Household Configuration`](#household-configuration) usada por esse [`Cycle`](#cycles).
+    - [`Accounts`](#accounts) podem ser excluídas de um [`Cycle`](#cycles) específico através da [`Budget Configuration`](#budget-configuration).
+    - [`Accounts`](#accounts) não podem ser adicionadas a um [`Cycle`](#cycles) se não faziam parte da [`Household Configuration`](#household-configuration) usada por esse [`Cycle`](#cycles).
+- [`Cycle`](#cycles) e [`Transactions`](#transactions):
+    - Um [`Cycle`](#cycles) não é dono de [`Transactions`](#transactions).
+    - [`Transactions`](#transactions) pertencem a [`Accounts`](#accounts).
+    - [`Transactions`](#transactions) são consideradas parte de um [`Cycle`](#cycles) apenas porque o seu timestamp de transação está dentro do intervalo de datas do [`Cycle`](#cycles).
+    - Apenas Confirmed [`Transactions`](#transactions) são usadas nos cálculos de [`Budget`](#budget).
+
+## Budget Configuration
+
+- [`Budget Configuration`](#budget-configuration) é uma entidade persistida.
+- [`Budget Configuration`](#budget-configuration) representa valores configuráveis específicos de um [`Cycle`](#cycles).
+- [`Budget Configuration`](#budget-configuration):
+    - Tem um identificador.
+    - Pertence a um [`Cycle`](#cycles).
+    - É persistida.
+    - Guarda apenas valores configuráveis específicos desse [`Cycle`](#cycles).
+- [`Budget Configuration`](#budget-configuration) pode conter:
+    - Substituição do [`Savings Goal`](#financial-goals).
+    - Overrides semanais do calendário de comer fora.
+    - Overrides semanais do valor por pessoa para comer fora.
+    - [`Recurring Transaction Definitions`](#recurring-transaction-definitions) que devem ser ignoradas apenas neste [`Cycle`](#cycles), sem alterar a definição original.
+    - [`Accounts`](#accounts) excluídas do [`Cycle`](#cycles).
+    - Overrides de recurring instances específicas deste [`Cycle`](#cycles), como alteração de data, valor ou estado, sem alterar a [`Recurring Transaction Definition`](#recurring-transaction-definitions) original.
+    - Configurações futuras específicas de [`Budget`](#budget).
+- [`Budget Configuration`](#budget-configuration) não guarda valores calculados de [`Budget`](#budget).
+- O [`Budget`](#budget) em si não é persistido.
+- Apenas a [`Budget Configuration`](#budget-configuration) é persistida.
+
+## Budget
+
+- [`Budget`](#budget) é análise calculada.
+- [`Budget`](#budget) é totalmente calculado.
+- [`Budget`](#budget) não é uma entidade persistida.
+- Valores de [`Budget`](#budget) nunca devem ser persistidos como estado de negócio autoritativo.
+- Um [`Budget`](#budget) é calculado para um [`Cycle`](#cycles) usando:
+    - Confirmed [`Transactions`](#transactions).
+    - Income allocations explícitas em Confirmed [`Transactions`](#transactions).
+    - Budget groups efetivos de expense [`Transactions`](#transactions) e [`Transaction Items`](#transaction-items).
+    - A versão de [`Household Configuration`](#household-configuration) associada ao [`Cycle`](#cycles).
+    - [`Budget Configuration`](#budget-configuration) do [`Cycle`](#cycles).
+    - [`Budget Rules`](#budget-rules).
+    - [`Financial Goals`](#financial-goals).
+    - [`Recurring Transaction Definitions`](#recurring-transaction-definitions).
+    - Recurring instances geradas para o [`Cycle`](#cycles).
+- [`Budget`](#budget) suporta diferentes vistas:
+    - Uma vista total do [`Household`](#households), incluindo todos os [`Members`](#members), [`Accounts`](#accounts) e [`Transactions`](#transactions) incluídos.
+    - Uma vista filtrada por [`Member`](#members), mostrando apenas [`Accounts`](#accounts) e [`Transactions`](#transactions) relacionadas com os [`Members`](#members) selecionados.
+- [`Budget`](#budget) calcula:
+    - Current Balance.
+    - Expected Balance.
+    - Expected End Balance.
+    - Total Income.
+    - Total Expenses.
+    - Available To Spend.
+    - Available To Spend Before Savings.
+    - Remaining Savings Target.
+    - Needs Allocated.
+    - Wants Allocated.
+    - Savings Allocated.
+    - Needs Used.
+    - Wants Used.
+    - Savings Used.
+    - Daily Spending Limit.
+    - [`Savings Progress`](#financial-goals).
+    - Spending Forecast.
+    - Eating Out Suggestions.
+- Current Balance:
+    - Representa o saldo esperado atual considerando apenas Confirmed [`Transactions`](#transactions) passadas e atuais.
+    - Não inclui futuras planned recurring transactions.
+    - É calculado.
+    - Não é persistido.
+- Expected Balance:
+    - Representa o saldo esperado para uma data futura específica ou para uma sequência de datas.
+    - Quando usado numa vista diária, pode ser calculado como uma série temporal com pares data/valor.
+    - Exemplo: `2026-01-10 -> 1250 EUR`.
+    - Inclui Confirmed [`Transactions`](#transactions) até à data atual.
+    - Inclui planned recurring transactions esperadas antes ou na data futura selecionada.
+    - É calculado.
+    - Não é persistido.
+- Expected End Balance:
+    - Representa o saldo esperado no fim do [`Cycle`](#cycles) atual.
+    - Inclui Confirmed [`Transactions`](#transactions) e planned recurring transactions esperadas antes do fim do [`Cycle`](#cycles).
+    - É calculado.
+    - Não é persistido.
+- Available To Spend Before Savings:
+    - Representa o valor disponível antes de reservar o target de poupança ativo.
+    - É calculado.
+    - Não é persistido.
+- Available To Spend:
+    - Representa o valor disponível para gastar depois de reservar o target de poupança ativo.
+    - É calculado.
+    - Não é persistido.
+- Remaining Savings Target:
+    - Representa o valor que ainda falta poupar para cumprir o target de poupança ativo do [`Cycle`](#cycles).
+    - Nunca deve ser inferior a zero.
+    - É calculado.
+    - Não é persistido.
+- Needs Allocated:
+    - Representa o valor de entradas monetárias alocado a Needs no [`Cycle`](#cycles).
+    - É calculado a partir de income allocations explícitas em Confirmed [`Transactions`](#transactions) e de [`Budget Rules`](#budget-rules) aplicáveis.
+    - Quando uma [`Transaction`](#transactions) de entrada tem income allocation explícita, essa alocação tem prioridade sobre a [`Budget Rule`](#budget-rules) da [`Account`](#accounts).
+    - É calculado.
+    - Não é persistido.
+- Wants Allocated:
+    - Representa o valor de entradas monetárias alocado a Wants no [`Cycle`](#cycles).
+    - É calculado a partir de income allocations explícitas em Confirmed [`Transactions`](#transactions) e de [`Budget Rules`](#budget-rules) aplicáveis.
+    - Quando uma [`Transaction`](#transactions) de entrada tem income allocation explícita, essa alocação tem prioridade sobre a [`Budget Rule`](#budget-rules) da [`Account`](#accounts).
+    - É calculado.
+    - Não é persistido.
+- Savings Allocated:
+    - Representa o valor de entradas monetárias alocado a Savings no [`Cycle`](#cycles).
+    - É calculado a partir de income allocations explícitas em Confirmed [`Transactions`](#transactions) e de [`Budget Rules`](#budget-rules) aplicáveis.
+    - Quando uma [`Transaction`](#transactions) de entrada tem income allocation explícita, essa alocação tem prioridade sobre a [`Budget Rule`](#budget-rules) da [`Account`](#accounts).
+    - É calculado.
+    - Não é persistido.
+- Needs Used:
+    - Representa o valor de despesas descontado do grupo Needs no [`Cycle`](#cycles).
+    - É calculado a partir de expense [`Transactions`](#transactions) ou [`Transaction Items`](#transaction-items) cujo budget group efetivo seja Needs.
+    - É calculado.
+    - Não é persistido.
+- Wants Used:
+    - Representa o valor de despesas descontado do grupo Wants no [`Cycle`](#cycles).
+    - É calculado a partir de expense [`Transactions`](#transactions) ou [`Transaction Items`](#transaction-items) cujo budget group efetivo seja Wants.
+    - É calculado.
+    - Não é persistido.
+- Savings Used:
+    - Representa o valor descontado do grupo Savings no [`Cycle`](#cycles).
+    - É calculado a partir de savings outflows ou expense [`Transactions`](#transactions) e [`Transaction Items`](#transaction-items) cujo budget group efetivo seja Savings.
+    - É calculado.
+    - Não é persistido.
+- Budget group efetivo de uma despesa:
+    - Deve ser determinado primeiro pelo override explícito na [`Transaction`](#transactions) ou no [`Transaction Item`](#transaction-items), quando existir.
+    - Se não existir override explícito, deve ser usado o default budget group da [`Category`](#categories).
+    - Se a despesa tiver [`Transaction Items`](#transaction-items), cada item deve ter o seu próprio budget group efetivo.
+    - Se a despesa não tiver [`Transaction Items`](#transaction-items), o budget group efetivo aplica-se ao valor total da [`Transaction`](#transactions).
+    - Uma despesa Confirmed sem budget group efetivo válido não deve ser aceite para cálculo de [`Budget`](#budget).
+- Spending Forecast:
+    - Representa uma projeção dos gastos esperados até ao fim do [`Cycle`](#cycles).
+    - É calculado a partir de Confirmed [`Transactions`](#transactions), recurring instances planeadas, [`Budget Configuration`](#budget-configuration) e padrões de gasto conhecidos.
+    - Deve ser atualizado sempre que novos dados relevantes forem confirmados ou alterados.
+    - É calculado.
+    - Não é persistido.
+- Daily Spending Limit:
+    - É calculado a partir do valor disponível para gastar e dos dias restantes no [`Cycle`](#cycles).
+    - É recalculado quando novas Confirmed [`Transactions`](#transactions) são adicionadas.
+    - É recalculado quando recurring instances são skipped, modified ou completed.
+    - Não é persistido.
+- Daily underspend:
+    - Para cada dia em que os gastos ficam abaixo do Daily Spending Limit, o [`Budget`](#budget) deve mostrar o valor efetivamente poupado nesse dia.
+    - O valor não gasto aumenta o Daily Spending Limit calculado para os dias seguintes.
+    - Este valor é calculado e não é persistido.
+- Eating Out Suggestions:
+    - São calculadas a partir de [`Household Configuration`](#household-configuration), [`Budget Configuration`](#budget-configuration), [`Members`](#members) selecionados, valor disponível para gastar e Daily Spending Limit.
+    - São calculadas por semana dentro do [`Cycle`](#cycles), usando os defaults semanais definidos na [`Household Configuration`](#household-configuration).
+    - O [`Budget`](#budget) pode aplicar overrides esporádicos de comer fora através da [`Budget Configuration`](#budget-configuration).
+    - Overrides esporádicos aplicam-se a uma semana específica do [`Cycle`](#cycles), não ao [`Cycle`](#cycles) inteiro.
+    - Um override semanal pode alterar os dias de comer fora, o número de ocasiões nessa semana ou o valor máximo por pessoa nessa semana.
+    - O valor apresentado para uma ocasião de comer fora é a soma do valor máximo de comer fora para as pessoas incluídas.
+    - O valor máximo por pessoa deve respeitar sempre o Daily Spending Limit, independentemente de vir da [`Household Configuration`](#household-configuration) ou de um override semanal.
+        - Se a soma dos valores máximos por pessoa for superior ao Daily Spending Limit desse dia, o valor máximo efetivo por pessoa deve ser recalculado como `Daily Spending Limit / número de pessoas incluídas` que fica o valor máximo por pessoa para essa semana e todas as outras que restam no [`Cycle`](#cycles).
+    - O valor total sugerido para uma ocasião de comer fora nunca pode ultrapassar o Daily Spending Limit desse dia.
+    - Se o número de ocasiões para comer fora numa semana for reduzido, o valor libertado pode ser redistribuído pelas restantes ocasiões dessa semana, aumentando o valor máximo efetivo por pessoa.
+        - Em alternativa, uma ocasião removida pode ser transferida para a semana seguinte, desde que essa semana ainda esteja dentro do mesmo [`Cycle`](#cycles). Isto fica á escolha do utilizador.
+    - A redistribuição ou transferência deve continuar a respeitar o Daily Spending Limit de cada dia afetado.
+    - Quando comer fora acontece, o [`User`](#users) pode submeter uma fatura, documento, screenshot ou outro artefacto através de um [`Transaction Import`](#transaction-import).
+    - Quando comer fora não acontece, a sugestão pode ser marcada como skipped.
+    - Se a data de uma Eating Out Suggestion passar sem ser completed, ela pode ser automaticamente tratada como não realizada.
+    - Uma Eating Out Suggestion skipped pode ser recalculada para um futuro dia disponível.
+    - A recalculação deve evitar colocar a sugestão num dia que já tenha uma Eating Out Suggestion planeada, exceto quando explicitamente permitido pela configuração.
+
+## Budget Rules
+
+- [`Budget Rule`](#budget-rules) é uma entidade persistida.
+- Uma [`Budget Rule`](#budget-rules):
+    - Tem um identificador.
+    - Define uma percentagem de Needs.
+    - Define uma percentagem de Wants.
+    - Define uma percentagem de Savings.
+    - Deve ter percentagens que somam 100%.
+- [`Budget Rules`](#budget-rules) aplicam-se apenas à alocação de entradas monetárias.
+- [`Budget Rules`](#budget-rules) não se aplicam a despesas.
+- Despesas são consideradas nos totais financeiros do [`Budget`](#budget) através das próprias [`Transactions`](#transactions), [`Transaction Items`](#transaction-items) e [`Categories`](#categories), não através de percentagens de Needs, Wants e Savings.
+- Cada entrada monetária deve ser alocada a Needs, Wants e Savings através de uma regra ou de uma alocação explícita.
+- Uma [`Budget Rule`](#budget-rules) pode ser:
+    - Uma regra por defeito do [`Household`](#households) aplicada individualmente a cada [`Account`](#accounts).
+    - Uma regra específica de uma [`Account`](#accounts) aplicada apenas a uma [`Account`](#accounts).
+- Uma [`Account`](#accounts) pode não ter [`Budget Rule`](#budget-rules) aplicável.
+- Resolução da [`Budget Rule`](#budget-rules) de uma [`Account`](#accounts):
+    - Se a [`Account`](#accounts) tiver opt-out explícito de [`Budget Rule`](#budget-rules), não deve ser aplicada nenhuma regra.
+    - Se a [`Account`](#accounts) tiver uma [`Budget Rule`](#budget-rules) específica, deve ser usada essa regra.
+    - Se a [`Account`](#accounts) não tiver regra específica nem opt-out explícito, pode herdar a [`Budget Rule`](#budget-rules) por defeito do [`Household`](#households), quando existir.
+    - Se não existir nenhuma [`Budget Rule`](#budget-rules) aplicável, a [`Account`](#accounts) continua incluída nos cálculos financeiros gerais do [`Budget`](#budget).
+        - Através das suas [`Transactions`](#transactions)
+- [`Accounts`](#accounts) sem [`Budget Rule`](#budget-rules) aplicável:
+    - Continuam a contribuir com as suas Confirmed [`Transactions`](#transactions) para Current Balance, Expected Balance, Expected End Balance, Total Income, Total Expenses, Available To Spend, Spending Forecast e Daily Spending Limit.
+    - As suas despesas continuam a ser descontadas de Needs Used, Wants Used ou Savings Used através do budget group efetivo da despesa.
+    - As suas entradas monetárias só contribuem para Needs Allocated, Wants Allocated e Savings Allocated se tiverem income allocation explícita.
+    - Entradas monetárias sem [`Budget Rule`](#budget-rules) aplicável e sem income allocation explícita devem ser tratadas como entradas por alocar.
+        - Estas entradas por alocar podem estar numa area reservada para as alocar manualmente.
+- Entradas de [`Accounts`](#accounts) sem [`Budget Rule`](#budget-rules):
+    - Devem continuar a ser consideradas em Total Income, Current Balance, Expected Balance, Expected End Balance e Available To Spend.
+    - Devem ter uma alocação explícita antes de poderem contribuir para Needs Allocated, Wants Allocated e Savings Allocated.
+    - A alocação explícita pode indicar 100% Needs, 100% Wants ou 100% Savings.
+    - A alocação explícita também pode dividir a entrada por percentagens de Needs, Wants e Savings, desde que somem 100%.
+    - Esta alocação aplica-se apenas a entradas monetárias, não a despesas.
+- Resolução da alocação de uma entrada:
+    - Se a [`Transaction`](#transactions) de entrada tiver alocação explícita, essa alocação deve ser usada.
+    - Se a [`Transaction`](#transactions) de entrada não tiver alocação explícita e a [`Account`](#accounts) tiver uma [`Budget Rule`](#budget-rules) aplicável, deve ser usada a [`Budget Rule`](#budget-rules) da [`Account`](#accounts).
+    - Se a [`Transaction`](#transactions) de entrada não tiver alocação explícita e a [`Account`](#accounts) não tiver [`Budget Rule`](#budget-rules) aplicável, a entrada deve exigir alocação manual antes de ser considerada nos cálculos de Needs Allocated, Wants Allocated e Savings Allocated.
+- Totais do [`Household`](#households):
+    - Needs Allocated, Wants Allocated e Savings Allocated são calculados somando os valores monetários alocados a partir das entradas de cada [`Account`](#accounts).
+    - Needs Used, Wants Used e Savings Used são calculados somando despesas pelo budget group efetivo de cada [`Transaction`](#transactions) ou [`Transaction Item`](#transaction-items).
+    - Nunca devem ser calculados agregando percentagens diretamente.
+- Exemplo:
+    - [`Account`](#accounts) A usa 50% Needs, 30% Wants, 20% Savings.
+    - [`Account`](#accounts) B não tem [`Budget Rule`](#budget-rules), mas uma entrada específica foi alocada como 100% Needs pelo [`User`](#users).
+    - Needs Allocated do [`Household`](#households) é a soma do valor alocado a Needs da [`Account`](#accounts) A e do valor alocado a Needs da [`Account`](#accounts) B.
+    - Needs Used do [`Household`](#households) é a soma das despesas cujo budget group efetivo é Needs.
+    - Needs do [`Household`](#households) nunca é calculado por média ou combinação de percentagens.
+
+## Financial Goals
+
+- [`Financial Goal`](#financial-goals) é configuração persistida e dados de planeamento.
+- Um [`Household`](#households) pode conter vários [`Financial Goals`](#financial-goals).
+- Um [`Financial Goal`](#financial-goals) pode ser designado como [`Savings Goal`](#financial-goals) principal.
+- Outros [`Financial Goals`](#financial-goals) podem representar:
+    - Holiday.
+    - Car.
+    - Emergency Fund.
+    - House.
+    - Outros goals personalizados.
+- Um [`Financial Goal`](#financial-goals):
+    - Tem um identificador.
+    - Pertence a um [`Household`](#households).
+    - Tem um nome.
+    - Tem um target amount.
+    - Tem um current value calculado pelo [`Budget`](#budget).
+    - Pode ter uma deadline.
+    - Pode ter uma priority.
+    - Tem um estado.
+- Estados de Goal:
+    - Active.
+    - Completed.
+    - Cancelled.
+- [`Savings Goal`](#financial-goals):
+    - Representa configuração.
+    - Define um target usado para planeamento.
+    - Pode ser usado como target de poupança principal para [`Budgets`](#budget).
+- [`Savings Progress`](#financial-goals):
+    - Representa valores calculados.
+    - É calculado pelo [`Budget`](#budget) para cada [`Financial Goal`](#financial-goals).
+    - Não é persistido como estado de negócio autoritativo.
+- Cálculos de [`Budget`](#budget):
+    - Calculam o progresso de cada [`Financial Goal`](#financial-goals).
+    - Calculam o Remaining Savings Target para o [`Savings Goal`](#financial-goals) principal quando existir.
+    - Podem usar [`Budget Configuration`](#budget-configuration) para substituir o target de poupança de um [`Cycle`](#cycles) específico.
+
+## Recurring Transaction Definitions
+
+- [`Recurring Transaction Definition`](#recurring-transaction-definitions) é dado de planeamento persistido.
+- Uma [`Recurring Transaction Definition`](#recurring-transaction-definitions) não é uma [`Transaction`](#transactions).
+- Uma [`Recurring Transaction Definition`](#recurring-transaction-definitions) define um padrão de transação.
+- Uma [`Recurring Transaction Definition`](#recurring-transaction-definitions):
+    - Tem um identificador.
+    - Referencia uma [`Account`](#accounts).
+    - Tem um amount.
+    - Referencia uma [`Category`](#categories).
+    - Tem uma description.
+    - Tem uma frequency.
+    - Tem um day of month.
+    - Tem uma start date.
+    - Pode ter uma end date.
+    - Tem um estado:
+        - Enabled.
+        - Disabled.
+- No início de cada [`Cycle`](#cycles):
+    - [`Recurring Transaction Definitions`](#recurring-transaction-definitions) Enabled geram recurring instances para esse [`Budget`](#budget) específico.
+    - Recurring instances geradas são associadas à [`Budget Configuration`](#budget-configuration) do [`Cycle`](#cycles) ou à vista de planeamento.
+    - Recurring instances geradas não são as definições originais.
+- Recurring instances podem ser:
+    - Skipped no [`Cycle`](#cycles).
+    - Modified no [`Cycle`](#cycles).
+    - Completed como Confirmed [`Transactions`](#transactions).
+- Uma alteração de um único [`Cycle`](#cycles) nunca deve modificar a [`Recurring Transaction Definition`](#recurring-transaction-definitions) original.
+- Recurring instances:
+    - Podem ocorrer ligeiramente antes ou depois do day of month por defeito num [`Cycle`](#cycles) específico.
+    - Podem ter a sua data ajustada para esse [`Cycle`](#cycles) específico.
+    - Podem ser disabled ou skipped para esse [`Cycle`](#cycles) específico.
+    - São usadas pelos cálculos de [`Budget`](#budget) para expected balances e spending forecasts.
+- [`Transactions`](#transactions) ad hoc novas não devem ser adicionadas como recurring instances.
+- Novo comportamento recorrente deve ser representado criando ou editando uma [`Recurring Transaction Definition`](#recurring-transaction-definitions).
+
+## Transactions
+
+- [`Transaction`](#transactions) é uma entidade persistida.
+- Uma [`Transaction`](#transactions):
+    - Tem um identificador.
+    - Pertence exatamente a uma [`Account`](#accounts).
+    - Tem um valor monetário.
+    - Tem um timestamp completo.
+    - Tem um estado.
+    - Tem um transaction type.
+    - Pode ter uma income allocation quando representa uma entrada monetária.
+    - Pode ter um budget group override quando representa uma despesa sem [`Transaction Items`](#transaction-items).
+    - Pode referenciar um [`Merchant`](#merchants).
+    - Pode conter [`Transaction Items`](#transaction-items).
+    - Pode referenciar um [`Transaction Import`](#transaction-import).
+    - Pode identificar opcionalmente o [`User`](#users) que realizou a compra quando a [`Account`](#accounts) é Joint.
+- Valor da [`Transaction`](#transactions):
+    - É negativo para expenses e savings outflows.
+    - É positivo para income e savings inflows.
+- Timestamp da [`Transaction`](#transactions):
+    - Deve ser guardado como timestamp ISO8601 completo, incluindo timezone.
+    - Nunca deve ser guardado apenas como data.
+    - A timezone determina o dia correto da [`Transaction`](#transactions).
+    - A inclusão num [`Cycle`](#cycles) é baseada no timestamp da [`Transaction`](#transactions) interpretado na timezone relevante.
+- Estados de [`Transaction`](#transactions):
+    - Pending Review.
+    - Confirmed.
+    - Rejected.
+    - Archived.
+- Apenas Confirmed [`Transactions`](#transactions) participam nos cálculos de [`Budget`](#budget).
+- Pending Review [`Transactions`](#transactions):
+    - Requerem revisão do [`User`](#users) antes de afetarem [`Budgets`](#budget).
+    - Não afetam cálculos de [`Budget`](#budget).
+- Rejected [`Transactions`](#transactions):
+    - Representam erros de análise, importações duplicadas ou entradas rejeitadas intencionalmente.
+    - Não afetam cálculos de [`Budget`](#budget).
+    - Podem ser movidas para o arquivo para consulta posterior.
+- Archived [`Transactions`](#transactions):
+    - Permanecem disponíveis para consulta.
+    - Não afetam cálculos de [`Budget`](#budget).
+- [`Transaction`](#transactions) types:
+    - Income.
+    - Expense.
+    - Savings Inflow.
+    - Savings Outflow.
+- Income:
+    - Representa dinheiro a entrar numa [`Account`](#accounts).
+    - Deve referenciar uma income [`Category`](#categories).
+    - Pode ter uma income allocation explícita para Needs, Wants e Savings.
+    - A income allocation explícita pode ser 100% Needs, 100% Wants, 100% Savings ou uma divisão percentual que some 100%.
+    - A income allocation explícita é usada quando a [`Account`](#accounts) não tem [`Budget Rule`](#budget-rules) aplicável ou quando o [`User`](#users) quer substituir a alocação da regra para aquela entrada específica.
+- Expense:
+    - Representa dinheiro a sair de uma [`Account`](#accounts).
+    - Deve referenciar uma expense [`Category`](#categories).
+    - Não usa [`Budget Rules`](#budget-rules) para alocação de Needs, Wants e Savings.
+    - Deve ter um budget group efetivo:
+        - Needs.
+        - Wants.
+        - Savings.
+    - O budget group efetivo vem por defeito da [`Category`](#categories).
+    - O [`User`](#users) pode definir um budget group override numa despesa específica.
+    - O budget group override da despesa tem prioridade sobre o default budget group da [`Category`](#categories).
+- Savings Inflow:
+    - Representa dinheiro a entrar numa [`Account`](#accounts) vindo de uma [`Savings Account`](#accounts).
+- Savings Outflow:
+    - Representa dinheiro a sair de uma [`Account`](#accounts) para uma [`Savings Account`](#accounts).
+
+## Transaction Items
+
+- [`Transaction Item`](#transaction-items) é uma entidade filha persistida de [`Transaction`](#transactions).
+- Uma [`Transaction`](#transactions) pode conter um ou mais [`Transaction Items`](#transaction-items).
+- [`Transaction Items`](#transaction-items) permitem dividir uma única [`Transaction`](#transactions) em várias partes categorizadas.
+- Um [`Transaction Item`](#transaction-items):
+    - Tem um amount.
+    - Referencia uma [`Category`](#categories).
+    - Pode ter um budget group override quando pertence a uma despesa.
+- A soma dos amounts de todos os [`Transaction Items`](#transaction-items) deve ser igual ao amount total da [`Transaction`](#transactions).
+- Se uma [`Transaction`](#transactions) não tiver uma divisão explícita, pode ser tratada como tendo um [`Transaction Item`](#transaction-items) igual ao total da [`Transaction`](#transactions).
+- Quando uma despesa tem [`Transaction Items`](#transaction-items):
+    - Cada [`Transaction Item`](#transaction-items) deve ter um budget group efetivo.
+    - O budget group efetivo do item vem primeiro do budget group override do próprio item.
+    - Se o item não tiver override, o budget group efetivo vem do default budget group da [`Category`](#categories) do item.
+    - O valor de cada item deve ser descontado do respetivo budget group efetivo.
+- Quando uma despesa não tem [`Transaction Items`](#transaction-items):
+    - O valor total da [`Transaction`](#transactions) deve ser descontado do budget group efetivo da própria [`Transaction`](#transactions).
+- Exemplo:
+    - Total da [`Transaction`](#transactions): 120 EUR.
+    - [`Transaction Items`](#transaction-items):
+        - 70 EUR, Supermarket.
+        - 30 EUR, Health.
+        - 20 EUR, Clothing.
+
+## Transaction Import
+
+- [`Transaction Import`](#transaction-import) é uma entidade persistida que representa o processo de importação.
+- Um [`Transaction Import`](#transaction-import):
+    - Tem um identificador.
+    - Tem um origin type.
+    - Pode referenciar um artefacto carregado.
+    - Pode gerar uma ou várias [`Transactions`](#transactions).
+    - Tem um workflow state.
+- Origin types:
+    - Manual.
+    - PDF.
+    - Screenshot.
+    - Apple Shortcut.
+    - Future integrations.
+- Origem Manual:
+    - É introduzida diretamente pelo [`User`](#users).
+    - Não requer artefacto.
+- Origem PDF:
+    - Pode representar movimentos de conta, extratos bancários, faturas ou documentos semelhantes.
+    - Guarda o documento carregado num bucket de ficheiros.
+- Origem Screenshot:
+    - Pode representar um movimento da app do banco, transferência MB WAY ou comprovativo visual semelhante.
+    - Guarda o screenshot carregado num bucket de ficheiros.
+- Origem Apple Shortcut:
+    - Representa o resultado da execução automática de um Apple Shortcut.
+    - Pode ser acionada após Apple Pay ou eventos de pagamento semelhantes.
+    - Pode criar uma importação através de app intent, chamada a endpoint ou mecanismo de integração futuro.
+- Future integrations:
+    - Podem adicionar origins de importação adicionais sem alterar o modelo de [`Transaction`](#transactions).
+- Tratamento de artefactos:
+    - Imports com artefactos devem guardar o ficheiro original num bucket.
+    - Inteligência artificial pode analisar artefactos para extrair campos propostos de [`Transaction`](#transactions).
+    - [`Transactions`](#transactions) extraídas devem entrar em revisão antes de se tornarem Confirmed.
+    - Durante a revisão, o [`User`](#users) deve confirmar a [`Category`](#categories) e o budget group efetivo de cada despesa.
+    - Durante a revisão, o [`User`](#users) pode aceitar o default budget group da [`Category`](#categories) ou definir um budget group override na [`Transaction`](#transactions) ou no [`Transaction Item`](#transaction-items).
+    - Uma despesa importada não pode tornar-se Confirmed enquanto não tiver um budget group efetivo válido.
+    - Exemplo: uma despesa com [`Category`](#categories) Supermarket pode herdar Needs por defeito, mas pode ser confirmada como Wants através de override no processo de importação.
+- Workflow:
+    - Uploaded.
+    - Analysing.
+    - Needs Review.
+    - Approved.
+    - [`Transactions`](#transactions) tornam-se Confirmed.
+    - [`Budget`](#budget) recalcula.
+- Imports rejeitados:
+    - Nunca afetam [`Budgets`](#budget).
+    - Não devem criar Confirmed [`Transactions`](#transactions).
+- Apenas Confirmed [`Transactions`](#transactions) afetam [`Budgets`](#budget).
+
+## Merchants
+
+- [`Merchant`](#merchants) é uma entidade persistida.
+- Um [`Merchant`](#merchants):
+    - Tem um identificador.
+    - Tem um nome.
+    - Tem uma [`Category`](#categories) por defeito.
+    - Tem [`Categories`](#categories) permitidas.
+    - Tem um emoji por defeito.
+    - Pode ter um logo.
+    - Pode ter um website.
+- [`Transactions`](#transactions) podem referenciar um [`Merchant`](#merchants).
+- [`Categories`](#categories) por defeito de [`Merchant`](#merchants) são apenas sugestões.
+- Um [`Merchant`](#merchants) sugere automaticamente a sua [`Category`](#categories) por defeito quando é usado numa [`Transaction`](#transactions).
+- [`Users`](#users) podem sempre substituir a [`Category`](#categories) sugerida.
+- [`Categories`](#categories) permitidas podem restringir ou orientar a seleção válida de [`Category`](#categories) para esse [`Merchant`](#merchants).
+
+## Categories
+
+- [`Category`](#categories) é uma entidade persistida.
+- [`Category`](#categories) substitui tipos de entrada, tipos de despesa, subtipos de despesa e tipos de comerciante hardcoded.
+- Uma [`Category`](#categories):
+    - Tem um identificador.
+    - Tem um nome.
+    - Pode ter uma parent [`Category`](#categories).
+    - Tem um transaction type.
+    - Deve ter um default budget group quando o transaction type é Expense.
+    - Pode ter um icon.
+- [`Categories`](#categories) podem conter [`Categories`](#categories) filhas ilimitadas.
+- Hierarquias de [`Category`](#categories) não devem ser hardcoded.
+- Exemplo de hierarquia:
+    - House.
+        - Utilities.
+            - Electricity.
+            - Internet.
+            - Water.
+- Exemplos de income [`Categories`](#categories):
+    - Salary.
+    - Holiday allowance.
+    - Christmas allowance.
+- Exemplos de expense [`Categories`](#categories):
+    - Restaurants, com default budget group Wants.
+    - Cafes, com default budget group Wants.
+    - Supermarkets, com default budget group Needs.
+    - Fuel.
+    - Loans.
+        - Car.
+        - House.
+    - Clothing.
+    - Technology.
+    - Entertainment.
+        - Subscription.
+    - Insurance.
+        - Subscription.
+    - Health.
+- Regra de Subscription:
+    - [`Categories`](#categories) podem definir se [`Transactions`](#transactions) nessa [`Category`](#categories) devem ser representadas por uma [`Recurring Transaction Definition`](#recurring-transaction-definitions).
+    - Se uma [`Category`](#categories) exigir recorrência, uma [`Transaction`](#transactions) não recorrente nessa [`Category`](#categories) é inválida, exceto quando explicitamente substituída por uma regra de negócio.
+- Regra de default budget group:
+    - Expense [`Categories`](#categories) devem definir um default budget group:
+        - Needs.
+        - Wants.
+        - Savings.
+    - O default budget group da [`Category`](#categories) é usado para despesas quando não existe override na [`Transaction`](#transactions) ou no [`Transaction Item`](#transaction-items).
+    - O default budget group é uma sugestão configurada pela [`Category`](#categories), mas pode ser substituído numa despesa específica.
+    - Exemplo: Supermarket pode ter default budget group Needs.
+    - Exemplo: Restaurants e Cafes podem ter default budget group Wants.
+    - Uma despesa Confirmed deve ter sempre um budget group efetivo, vindo da [`Category`](#categories) ou de override explícito.
+
+## States
+
+- Qualquer entidade que precise de gestão de ciclo de vida deve definir estados explícitos.
+- Estados de [`Transaction`](#transactions):
+    - Pending Review.
+    - Confirmed.
+    - Rejected.
+    - Archived.
+- Estados de Goal:
+    - Active.
+    - Completed.
+    - Cancelled.
+- Estados de [`Recurring Transaction Definition`](#recurring-transaction-definitions):
+    - Enabled.
+    - Disabled.
+- Estados de [`Cycle`](#cycles):
+    - Open.
+    - Closed.
+    - Locked.
+- Significado dos estados de [`Cycle`](#cycles):
+    - Open:
+        - O [`Cycle`](#cycles) está ativo e pode aceitar novas Confirmed [`Transactions`](#transactions).
+        - Os cálculos de [`Budget`](#budget) continuam a atualizar.
+    - Closed:
+        - O [`Cycle`](#cycles) terminou.
+        - Cálculos históricos permanecem disponíveis.
+        - Alterações tardias ainda podem ser permitidas se a aplicação o permitir.
+    - Locked:
+        - O [`Cycle`](#cycles) está finalizado.
+        - Alterações requerem ação administrativa explícita ou fluxo de correção.
+
+## Audit Log
+
+- [`Audit Log`](#audit-log) é uma entidade persistida.
+- Todas as modificações a entidades persistidas devem gerar uma entrada de [`Audit Log`](#audit-log).
+- Uma entrada de [`Audit Log`](#audit-log) contém:
+    - Identificador.
+    - Entity type.
+    - Entity identifier.
+    - Action.
+    - Performed by.
+    - Timestamp.
+    - Previous value.
+    - New value.
+- [`Audit Logs`](#audit-log):
+    - Suportam rastreabilidade histórica.
+    - Suportam versionamento de configuração.
+    - Suportam revisão de alterações a [`Transactions`](#transactions), [`Financial Goals`](#financial-goals), [`Accounts`](#accounts), [`Categories`](#categories), [`Merchants`](#merchants), [`Budget Rules`](#budget-rules) e outras entidades persistidas.
+    - Não devem ser usados como substituto da própria entidade persistida.
+
+## Timezone and Dates
+
+- [`Transactions`](#transactions) devem guardar timestamps completos.
+- Timestamps de [`Transaction`](#transactions) devem usar ISO8601 incluindo timezone.
+- A timezone determina o dia correto da [`Transaction`](#transactions).
+- [`Transactions`](#transactions) nunca devem guardar apenas uma data.
+- Fronteiras de [`Cycle`](#cycles) devem ser avaliadas de forma consistente com a timezone configurada do [`Household`](#households) ou com as regras relevantes de timezone de [`Account`](#accounts) ou [`Transaction`](#transactions).
+- Cálculos de [`Budget`](#budget) devem usar o dia correto da [`Transaction`](#transactions) após interpretação da timezone.
